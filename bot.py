@@ -19,51 +19,75 @@ if not firebase_admin._apps:
 
 TMDB_API_KEY = "7ff77f551b7a1db3b68d9a5a991e7cd5"
 
-def process_item_fast(item, is_tv=False):
-    m_id = str(item['id'])
-    type_path = 'tv_series' if is_tv else 'subtitled_movies'
-    ref = db.reference(f'/{type_path}/{m_id}')
+def process_item_smart(item, is_tv=False):
+    tmdb_id = str(item['id'])
+    # گۆڕینی ناوی نۆدەکان بەپێی داواکاری تۆ
+    path = 'series' if is_tv else 'subtitled_movies'
+    ref = db.reference(f'/{path}/{tmdb_id}')
     
-    # ئەگەر فیلمەکە پێشتر نەبوو، یەکسەر زانیارییەکانی دابنێ
+    # ئەگەر فیلم یان زنجیرەکە پێشتر نەبوو
     if ref.get() is None:
-        print(f"✅ خێرا زیادکرا: {item.get('title' if not is_tv else 'name')}", flush=True)
         data = {
             "id": item['id'],
             "title": item.get('title' if not is_tv else 'name'),
             "poster": f"https://image.tmdb.org/t/p/w500{item['poster_path']}",
             "year": item.get('release_date' if not is_tv else 'first_air_date', '0000')[:4],
-            "hasKurdishSub": False, # هێشتا وەرگێڕانی بۆ نەکراوە
-            "url": f"https://vidsrc.me/embed/movie?tmdb={m_id}" if not is_tv else f"https://vidsrc.me/embed/tv?tmdb={m_id}",
+            "hasKurdishSub": False,
             "type": "tv" if is_tv else "movie"
         }
+
+        # ئەگەر زنجیرە بوو، هەموو وەرز و ئەڵقەکان ڕێکدەخەین
+        if is_tv:
+            print(f"📡 خەریکی هێنانی ئەڵقەکانی زنجیرەی: {data['title']}", flush=True)
+            try:
+                tv_url = f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_API_KEY}"
+                tv_detail = requests.get(tv_url).json()
+                
+                seasons = {}
+                for s in tv_detail.get('seasons', []):
+                    s_num = s['season_number']
+                    if s_num == 0: continue # وەرزی تایبەت لادەبەین
+                    
+                    episodes = {}
+                    for e in range(1, s['episode_count'] + 1):
+                        episodes[f"ep_{e}"] = {
+                            "ep_num": e,
+                            "url": f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&sea={s_num}&epi={e}",
+                            "hasKurdishSub": False
+                        }
+                    seasons[f"season_{s_num}"] = episodes
+                data["seasons"] = seasons
+            except Exception as e:
+                print(f"Error fetching TV details: {e}")
+        else:
+            # ئەگەر فیلم بوو، تەنها یەک لینکی هەیە
+            data["url"] = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
+
         ref.set(data)
+        print(f"✅ {data['title']} بە سەرکەوتوویی نێردرا بۆ /{path}", flush=True)
 
-def run_fast_crawler():
-    # دەستپێکردن بە هێنانی 10 لاپەڕە بەیەکەوە (200 فیلم و زنجیرە لە هەر 3 خولەکێکدا!)
+def run():
     status_ref = db.reference('/crawler_status')
-    status = status_ref.get() or {"movie_page": 1, "tv_page": 1}
+    status = status_ref.get() or {"m": 1, "t": 1}
     
-    m_page = status['movie_page']
-    t_page = status['tv_page']
+    # پشکنینی 5 لاپەڕە فیلم
+    print(f"🚀 پشکنینی فیلمەکان لە لاپەڕەی {status['m']}...")
+    for p in range(status['m'], status['m'] + 5):
+        m_url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&page={p}&sort_by=popularity.desc"
+        m_list = requests.get(m_url).json().get('results', [])
+        for i in m_list: process_item_smart(i, is_tv=False)
+        status['m'] = p
 
-    print(f"🚀 پڕکردنەوەی خێرا دەستی پێکرد لە لاپەڕەی: {m_page}", flush=True)
+    # پشکنینی 5 لاپەڕە زنجیرە
+    print(f"🚀 پشکنینی زنجیرەکان لە لاپەڕەی {status['t']}...")
+    for p in range(status['t'], status['t'] + 5):
+        t_url = f"https://api.themoviedb.org/3/discover/tv?api_key={TMDB_API_KEY}&page={p}&sort_by=popularity.desc"
+        t_list = requests.get(t_url).json().get('results', [])
+        for i in t_list: process_item_smart(i, is_tv=True)
+        status['t'] = p
 
-    # هێنانی فیلمەکان (5 لاپەڕە = 100 فیلم)
-    for p in range(m_page, m_page + 5):
-        url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&page={p}&sort_by=popularity.desc"
-        res = requests.get(url).json().get('results', [])
-        for item in res: process_item_fast(item, is_tv=False)
-        m_page = p
-
-    # هێنانی زنجیرەکان (5 لاپەڕە = 100 زنجیرە)
-    for p in range(t_page, t_page + 5):
-        url = f"https://api.themoviedb.org/3/discover/tv?api_key={TMDB_API_KEY}&page={p}&sort_by=popularity.desc"
-        res = requests.get(url).json().get('results', [])
-        for item in res: process_item_fast(item, is_tv=True)
-        t_page = p
-
-    # خەزنکردنی شوێنی وەستان
-    status_ref.set({"movie_page": m_page + 1, "tv_page": t_page + 1})
+    # خەزنکردنی لاپەڕەی کۆتایی
+    status_ref.set(status)
 
 if __name__ == "__main__":
-    run_fast_crawler()
+    run()
