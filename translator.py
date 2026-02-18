@@ -25,18 +25,16 @@ def translate_batch_safe(texts):
     """وەرگێڕانی گروپێک دەق بە شێوەیەکی سەلامەت"""
     if not texts: return []
     translator = GoogleTranslator(source='en', target='ckb')
-    combined = " [X] ".join(texts) # نیشانەیەکی سەلامەتتر بۆ جیاکردنەوە
+    combined = " [X] ".join(texts)
     try:
         res = translator.translate(combined)
         translated_list = res.split("[X]")
-        # ئەگەر ژمارەی ئەنجامەکان یەکسان نەبوو، یەک یەک وەرگێڕانیان بۆ بکە
         if len(translated_list) != len(texts):
-            print("⚠️ وەرگێڕانی بەکۆمەڵ تێکچوو، یەک یەک وەریدەگێڕین...")
             return [translator.translate(t) for t in texts]
         return [t.strip() for t in translated_list]
     except Exception as e:
         print(f"⚠️ ئیرۆر لە وەرگێڕان: {e}")
-        return texts # ئەگەر ئیرۆری دا، دەقە ئەسڵییەکە بگەڕێنەوە تا نەوەستێت
+        return texts
 
 def translate_srt_now(srt_content):
     blocks = srt_content.strip().split('\n\n')
@@ -51,16 +49,14 @@ def translate_srt_now(srt_content):
             batch_meta.append((lines[0], lines[1]))
             batch_texts.append("\n".join(lines[2:]))
             
-            # بەکارهێنانی 30 دێڕ بۆ ئەوەی گووگڵ ئیرۆر نەدات
             if len(batch_texts) >= 30:
                 translated = translate_batch_safe(batch_texts)
                 for j in range(min(len(translated), len(batch_meta))):
                     final_srt += f"{batch_meta[j][0]}\n{batch_meta[j][1]}\n{translated[j]}\n\n"
                 batch_texts, batch_meta = [], []
-                print(f"⚡ {i} دێڕ تەواو بوو...", flush=True)
-                time.sleep(1)
+                print(f"⚡ {i} دێڕ وەرگێڕدرا...", flush=True)
+                time.sleep(0.5)
 
-    # بۆ پاشماوەی دێڕەکان
     if batch_texts:
         translated = translate_batch_safe(batch_texts)
         for j in range(min(len(translated), len(batch_meta))):
@@ -80,8 +76,7 @@ def get_opensubtitles_srt(tmdb_id):
                 link = dl.json().get('link')
                 if link:
                     return requests.get(link).text
-    except Exception as e:
-        print(f"Error SRT: {e}")
+    except: pass
     return None
 
 def start_worker():
@@ -102,10 +97,19 @@ def start_worker():
                     db.reference(f'/kurdish_subtitles/{m_id}').set({"srt_content": k_srt})
                     ref.child(m_id).update({"hasKurdishSub": True})
                     print(f"✅ تەواو بوو: {title}", flush=True)
-                    return # لە هەر جاری ئیشکردندا تەنها یەک فیلم بکات تا ئیرۆر نەدات
+                    return True # یەک فیلم تەواو بوو
                 else:
-                    # ئەگەر ژێرنووس نەبوو، نیشانەی بدە کە کوردی نییە تا دووبارە نەگەڕێتەوە سەری
                     ref.child(m_id).update({"hasKurdishSub": "not_found"})
+    return False # هیچ فیلمێک نەبوو بۆ وەرگێڕان
 
 if __name__ == "__main__":
-    start_worker()
+    print("🤖 بۆتی وەرگێڕی بێوەستان (Loop Mode) چالاک بوو...")
+    # بۆ ماوەی 100 خول بەردەوام دەبێت
+    for i in range(100):
+        print(f"⏳ خولی وەرگێڕانی ژمارە {i+1} دەستی پێکرد...")
+        found = start_worker()
+        if not found:
+            print("😴 فیلمی نوێ نییە بۆ وەرگێڕان، 30 چرکە پشوو...")
+            time.sleep(30)
+        else:
+            time.sleep(2) # پشوو لە نێوان فیلمەکان
