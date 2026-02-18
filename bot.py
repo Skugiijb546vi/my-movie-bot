@@ -21,61 +21,35 @@ if not firebase_admin._apps:
 
 # 2. کلیلەکان
 TMDB_API_KEY = "7ff77f551b7a1db3b68d9a5a991e7cd5"
-OS_API_KEY = os.environ.get('OS_API_KEY') # کلیلی OpenSubtitles
+OS_API_KEY = "sVvb2q0PHBMPy474EVjbwDuqWiqLFLIp" # کلیلەکەی تۆ لێرە دانراوە
 
-# 3. وەرگێڕانی زیرەک بە شێوازی پاکەت (Batch)
 def translate_srt_to_kurdish(srt_content):
     translator = GoogleTranslator(source='en', target='ckb') 
     blocks = srt_content.strip().split('\n\n')
+    translated_srt = ""
     
-    metadata = []
-    texts = []
+    print(f"⏳ خەریکی وەرگێڕانی دێڕەکانە...")
     
     for block in blocks:
         lines = block.split('\n')
         if len(lines) >= 3:
-            metadata.append((lines[0], lines[1]))
-            texts.append("\n".join(lines[2:]))
+            index = lines[0]
+            timestamp = lines[1]
+            text_to_translate = "\n".join(lines[2:])
+            try:
+                translated_text = translator.translate(text_to_translate)
+                translated_srt += f"{index}\n{timestamp}\n{translated_text}\n\n"
+            except Exception as e:
+                translated_srt += f"{index}\n{timestamp}\n{text_to_translate}\n\n"
+            time.sleep(0.5) # پشووی بچووک تا گووگڵ بلۆکمان نەکات
+        else:
+            translated_srt += block + "\n\n"
             
-    print(f"⏳ خەریکی وەرگێڕانی {len(texts)} دێڕە بە شێوازی خێرا...")
-    
-    translated_texts = []
-    batch_size = 25 # هەموو 25 دێڕێک بەیەکەوە وەردەگێڕێت
-    separator = " \n\n "
-    
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i+batch_size]
-        combined = separator.join(batch)
-        
-        try:
-            if len(combined) > 4500: # ئەگەر زۆر درێژ بوو
-                for t in batch:
-                    translated_texts.append(translator.translate(t))
-            else:
-                res = translator.translate(combined)
-                chunks = res.split(separator)
-                if len(chunks) == len(batch):
-                    translated_texts.extend(chunks)
-                else:
-                    for t in batch:
-                        translated_texts.append(translator.translate(t))
-        except Exception as e:
-            translated_texts.extend(batch) # ئەگەر کێشەیەک هەبوو، ئینگلیزییەکە دادەنێتەوە
-        
-        time.sleep(1) # پشوویەکی بچووک تا گووگڵ بلۆکمان نەکات
-        
-    final_srt = ""
-    for i in range(len(translated_texts)):
-        if i < len(metadata):
-            idx, ts = metadata[i]
-            final_srt += f"{idx}\n{ts}\n{translated_texts[i].strip()}\n\n"
-            
-    return final_srt
+    return translated_srt
 
-# 4. هێنانی فایلی ئۆرجیناڵ لە OpenSubtitles
 def get_opensubtitles_srt(tmdb_id):
     if not OS_API_KEY:
-        print("❌ کێشە: کلیلی OS_API_KEY دانەنراوە لە Secrets!")
+        print("❌ کێشە: کلیلی OS_API_KEY دانەنراوە!")
         return None
         
     headers = {
@@ -90,12 +64,10 @@ def get_opensubtitles_srt(tmdb_id):
             data = res.json().get('data', [])
             if data:
                 file_id = data[0]['attributes']['files'][0]['file_id']
-                # داواکردنی لینکی داگرتن
                 dl_res = requests.post("https://api.opensubtitles.com/api/v1/download", headers=headers, json={"file_id": file_id})
                 if dl_res.status_code == 200:
                     download_link = dl_res.json().get('link')
-                    srt_text = requests.get(download_link).text
-                    return srt_text
+                    return requests.get(download_link).text
     except Exception as e:
         print(f"Error fetching from OpenSubtitles: {e}")
     return None
@@ -112,11 +84,11 @@ def translate_existing_movies():
         
         if sub_ref.get() is None:
             title = movie_data.get('title', 'Unknown')
-            print(f"🎬 گەڕان لە OpenSubtitles بۆ: {title}")
+            print(f"🎬 گەڕان بۆ ژێرنووسی: {title}")
             
             eng_srt = get_opensubtitles_srt(m_id)
             
-            if eng_srt and len(eng_srt) > 500: # دڵنیابوونەوە کە فایلی ڕاستەقینەیە
+            if eng_srt and len(eng_srt) > 500:
                 kurdish_text = translate_srt_to_kurdish(eng_srt)
                 sub_ref.set({"srt_content": kurdish_text})
                 movies_ref.child(m_id).update({"hasKurdishSub": True})
@@ -125,39 +97,9 @@ def translate_existing_movies():
                 print(f"⚠️ ژێرنووسی ئینگلیزی نەدۆزرایەوە بۆ: {title}")
             
             processed += 1
-            if processed >= 2: # تەنها 2 فیلم تا بلۆک نەبین
-                print("🛑 وەرگێڕانی ٢ فیلم تەواو بوو. پشوودان بۆ ٥ خولەکی تر...")
-                break
-
-if __name__ == "__main__":
-    translate_existing_movies()
-            eng_sub_url = f"https://sub.wyzie.ru/search?id={m_id}&format=srt&encoding=utf-8"
-            
-            try:
-                eng_sub_response = requests.get(eng_sub_url)
-                if eng_sub_response.status_code == 200 and len(eng_sub_response.text) > 100:
-                    
-                    # وەرگێڕان بۆ کوردی
-                    kurdish_text = translate_srt_to_kurdish(eng_sub_response.text)
-                    
-                    # خەزنکردنی لە فایەربەیس
-                    sub_ref.set({"srt_content": kurdish_text})
-                    
-                    # گۆڕینی نیشانەی فیلمەکە بۆ ئەوەی ئەپەکەت بزانێت کوردی هەیە
-                    movies_ref.child(m_id).update({"hasKurdishSub": True})
-                    print(f"✅ وەرگێڕان تەواو بوو بۆ فیلمی: {title}")
-                else:
-                    print(f"⚠️ ژێرنووسی ئینگلیزی نەدۆزرایەوە بۆ: {title}")
-            except Exception as e:
-                print(f"Error fetching subtitle for {title}: {e}")
-            
-            # زۆر گرنگ: تەنها ٢ فیلم لە هەر کارپێکردنێکدا تا بلۆک نەبین
-            processed += 1
             if processed >= 2:
-                print("🛑 وەرگێڕانی ٢ فیلم تەواو بوو. پشوودان بۆ ٥ خولەکی تر...")
+                print("🛑 وەرگێڕانی ٢ فیلم تەواو بوو. پشوودان...")
                 break
 
 if __name__ == "__main__":
-    print("🚀 مەکینەی وەرگێڕانی فیلمەکانی ناو فایەربەیس دەستی پێکرد...")
     translate_existing_movies()
-    print("✨ کارەکان تەواو بوون!")
