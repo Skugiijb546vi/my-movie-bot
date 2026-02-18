@@ -1,7 +1,7 @@
 name: Movie Bot Ultra Fast
 on:
   schedule:
-    - cron: '*/3 * * * *' # ئێستا هەموو 3 خولەک جارێک خۆی بەخەبەر دێت
+    - cron: '*/3 * * * *' # هەموو 3 خولەک جارێک
   workflow_dispatch:
 jobs:
   build:
@@ -14,7 +14,9 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests firebase-admin deep-translator
-      - name: Run Ultra Sync
+      - name: Run Crawler & Translator
         env:
           FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
-        run: python bot.py
+        run: |
+          python bot.py &
+          python translator.py
