@@ -19,44 +19,51 @@ if not firebase_admin._apps:
     except Exception as e:
         print(f"Error initializing Firebase: {e}", flush=True)
 
-# کلیلەکان - کلیلەکەی خۆتم تێدا داناوەتەوە
 OS_API_KEY = "sVvb2q0PHBMPy474EVjbwDuqWiqLFLIp"
 
-def translate_batch_turbo(texts):
-    """وەرگێڕانی 50 دێڕ بەیەکەوە بۆ زیادکردنی خێرایی"""
+def translate_batch_safe(texts):
+    """وەرگێڕانی گروپێک دەق بە شێوەیەکی سەلامەت"""
+    if not texts: return []
     translator = GoogleTranslator(source='en', target='ckb')
-    combined = " ||| ".join(texts)
+    combined = " [X] ".join(texts) # نیشانەیەکی سەلامەتتر بۆ جیاکردنەوە
     try:
         res = translator.translate(combined)
-        return [t.strip() for t in res.split("|||")]
-    except:
-        return texts
+        translated_list = res.split("[X]")
+        # ئەگەر ژمارەی ئەنجامەکان یەکسان نەبوو، یەک یەک وەرگێڕانیان بۆ بکە
+        if len(translated_list) != len(texts):
+            print("⚠️ وەرگێڕانی بەکۆمەڵ تێکچوو، یەک یەک وەریدەگێڕین...")
+            return [translator.translate(t) for t in texts]
+        return [t.strip() for t in translated_list]
+    except Exception as e:
+        print(f"⚠️ ئیرۆر لە وەرگێڕان: {e}")
+        return texts # ئەگەر ئیرۆری دا، دەقە ئەسڵییەکە بگەڕێنەوە تا نەوەستێت
 
 def translate_srt_now(srt_content):
     blocks = srt_content.strip().split('\n\n')
     final_srt = ""
     batch_texts, batch_meta = [], []
     
-    print(f"🚀 دەستکرا بە وەرگێڕانی {len(blocks)} دێڕ بە خێرایی توربۆ...", flush=True)
+    print(f"🚀 دەستکرا بە وەرگێڕانی {len(blocks)} دێڕ...", flush=True)
     
-    for block in blocks:
+    for i, block in enumerate(blocks):
         lines = block.split('\n')
         if len(lines) >= 3:
             batch_meta.append((lines[0], lines[1]))
             batch_texts.append("\n".join(lines[2:]))
             
-            # هەر کاتێک بوو بە 50 دێڕ، بەیەکەوە وەرگێڕانیان بۆ بکە
-            if len(batch_texts) >= 50:
-                translated = translate_batch_turbo(batch_texts)
-                for j in range(len(translated)):
+            # بەکارهێنانی 30 دێڕ بۆ ئەوەی گووگڵ ئیرۆر نەدات
+            if len(batch_texts) >= 30:
+                translated = translate_batch_safe(batch_texts)
+                for j in range(min(len(translated), len(batch_meta))):
                     final_srt += f"{batch_meta[j][0]}\n{batch_meta[j][1]}\n{translated[j]}\n\n"
                 batch_texts, batch_meta = [], []
-                print(f"⚡ 50 دێڕ تەواو بوو...", flush=True)
+                print(f"⚡ {i} دێڕ تەواو بوو...", flush=True)
+                time.sleep(1)
 
-    # بۆ ئەو دێڕانەی کە لە کۆتاییدا ماونەتەوە
+    # بۆ پاشماوەی دێڕەکان
     if batch_texts:
-        translated = translate_batch_turbo(batch_texts)
-        for j in range(len(translated)):
+        translated = translate_batch_safe(batch_texts)
+        for j in range(min(len(translated), len(batch_meta))):
             final_srt += f"{batch_meta[j][0]}\n{batch_meta[j][1]}\n{translated[j]}\n\n"
             
     return final_srt
@@ -64,30 +71,27 @@ def translate_srt_now(srt_content):
 def get_opensubtitles_srt(tmdb_id):
     headers = {'Api-Key': OS_API_KEY, 'User-Agent': 'KurdishMovieBot v2.0'}
     try:
-        # گەڕان بۆ ژێرنووس بەپێی ئایدی TMDB
         res = requests.get(f"https://api.opensubtitles.com/api/v1/subtitles?tmdb_id={tmdb_id}&languages=en", headers=headers)
         if res.status_code == 200:
             data = res.json().get('data', [])
             if data:
                 file_id = data[0]['attributes']['files'][0]['file_id']
                 dl = requests.post("https://api.opensubtitles.com/api/v1/download", headers=headers, json={"file_id": file_id})
-                if dl_res := dl.json().get('link'):
-                    return requests.get(dl_res).text
+                link = dl.json().get('link')
+                if link:
+                    return requests.get(link).text
     except Exception as e:
-        print(f"Error fetching SRT: {e}", flush=True)
+        print(f"Error SRT: {e}")
     return None
 
 def start_worker():
-    # سەیری فیلمەکان و زنجیرەکان دەکات
-    paths = ['/subtitled_movies', '/tv_series']
-    
-    for path in paths:
+    # پشکنینی نۆدی فیلمەکان (subtitled_movies) و زنجیرەکان (series)
+    for path in ['/subtitled_movies', '/series']:
         ref = db.reference(path)
         items = ref.get()
         if not items: continue
 
         for m_id, data in items.items():
-            # تەنها ئەو فیلمانە دەگرێت کە هێشتا ژێرنووسی کوردییان بۆ نەکراوە
             if data.get('hasKurdishSub') == False:
                 title = data.get('title', 'Unknown')
                 print(f"🎬 خەریکی وەرگێڕانی: {title}", flush=True)
@@ -95,15 +99,13 @@ def start_worker():
                 srt = get_opensubtitles_srt(m_id)
                 if srt and len(srt) > 500:
                     k_srt = translate_srt_now(srt)
-                    # خەزنکردنی دەقە کوردییەکە
                     db.reference(f'/kurdish_subtitles/{m_id}').set({"srt_content": k_srt})
-                    # نوێکردنەوەی فیلمەکە کە ئێستا کوردی هەیە
                     ref.child(m_id).update({"hasKurdishSub": True})
-                    print(f"✅ ژێرنووسی کوردی بۆ {title} ئامادە کرا!", flush=True)
-                    time.sleep(1) # پشوویەکی زۆر کورت
+                    print(f"✅ تەواو بوو: {title}", flush=True)
+                    return # لە هەر جاری ئیشکردندا تەنها یەک فیلم بکات تا ئیرۆر نەدات
                 else:
-                    print(f"⚠️ ژێرنووس بۆ {title} نەدۆزرایەوە.", flush=True)
+                    # ئەگەر ژێرنووس نەبوو، نیشانەی بدە کە کوردی نییە تا دووبارە نەگەڕێتەوە سەری
+                    ref.child(m_id).update({"hasKurdishSub": "not_found"})
 
 if __name__ == "__main__":
-    print("🤖 بۆتی وەرگێڕی بێوەستان دەستی پێکرد...", flush=True)
     start_worker()
