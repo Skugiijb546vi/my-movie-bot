@@ -1,7 +1,7 @@
 name: Movie Bot Ultra Fast
 on:
   schedule:
-    - cron: '*/5 * * * *' # هەموو 5 خولەک جارێک خۆی بەخەبەر دێت
+    - cron: '*/3 * * * *' # ئێستا هەموو 3 خولەک جارێک خۆی بەخەبەر دێت
   workflow_dispatch:
 jobs:
   build:
