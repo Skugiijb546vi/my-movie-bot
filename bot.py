@@ -19,11 +19,8 @@ if not firebase_admin._apps:
     except Exception as e:
         print(f"Error initializing Firebase: {e}")
 
-TMDB_API_KEY = "7ff77f551b7a1db3b68d9a5a991e7cd5"
-
-# فەنکشنی وەرگێڕانی ئۆتۆماتیکی فایلی SRT بۆ کوردی (سۆرانی)
+# فەنکشنی وەرگێڕان
 def translate_srt_to_kurdish(srt_content):
-    # ckb واتە سۆرانی (Central Kurdish)
     translator = GoogleTranslator(source='en', target='ckb') 
     blocks = srt_content.strip().split('\n\n')
     translated_srt = ""
@@ -36,81 +33,62 @@ def translate_srt_to_kurdish(srt_content):
             index = lines[0]
             timestamp = lines[1]
             text_to_translate = "\n".join(lines[2:])
-            
             try:
-                # وەرگێڕانی دەقەکە
                 translated_text = translator.translate(text_to_translate)
                 translated_srt += f"{index}\n{timestamp}\n{translated_text}\n\n"
             except Exception as e:
-                # ئەگەر کێشەیەک هەبوو، با بە ئینگلیزییەکە بمێنێتەوە تا فیلمەکە تێک نەچێت
                 translated_srt += f"{index}\n{timestamp}\n{text_to_translate}\n\n"
-                time.sleep(1) # پشوودان بۆ ئەوەی گووگڵ بلۆکمان نەکات
+                time.sleep(1)
         else:
             translated_srt += block + "\n\n"
-            
     return translated_srt
 
-def sync_movies():
-    url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
+def translate_existing_movies():
+    # دەچێتە ناو فایەربەیسەکەی خۆت نەک TMDB
+    movies_ref = db.reference('/subtitled_movies')
+    all_movies = movies_ref.get()
     
-    try:
-        response = requests.get(url)
-        movies = response.json().get('results', [])
-        
-        movies_processed_this_run = 0 # ڕێگریکردن لە بلۆکبوونی گیتھەب
-        
-        for m in movies:
-            m_id = str(m['id'])
-            ref = db.reference(f'/subtitled_movies/{m_id}')
-            
-            if ref.get() is None:
-                title = m['title']
-                print(f"🎬 فیلمی نوێ دۆزرایەوە: {title}")
-                
-                # 1. هێنانی ژێرنووسە ئینگلیزییەکە
-                eng_sub_url = f"https://sub.wyzie.ru/search?id={m_id}&format=srt&encoding=utf-8"
-                eng_sub_response = requests.get(eng_sub_url)
-                
-                kurdish_subtitle_text = ""
-                if eng_sub_response.status_code == 200 and len(eng_sub_response.text) > 100:
-                    # 2. ناردنی بۆ وەرگێڕان ئەگەر ژێرنووس هەبوو
-                    kurdish_subtitle_text = translate_srt_to_kurdish(eng_sub_response.text)
-                    
-                    # 3. خەزنکردنی ژێرنووسە کوردییەکە لە فایەربەیس (لە نۆدێکی تایبەت تا قورس نەبێت)
-                    sub_ref = db.reference(f'/kurdish_subtitles/{m_id}')
-                    sub_ref.set({"srt_content": kurdish_subtitle_text})
-                    print(f"✅ ژێرنووسی کوردی بۆ {title} دروستکرا و خەزنکرا!")
-                else:
-                    print(f"⚠️ ژێرنووسی ئینگلیزی بۆ {title} نەدۆزرایەوە.")
+    if not all_movies:
+        print("هیچ فیلمێک لە فایەربەیس نەدۆزرایەوە.")
+        return
 
-                # 4. ئامادەکردنی زانیارییەکان ڕێک بەپێی مۆدێلەکەت
-                movie_data = {
-                    "id": m['id'],
-                    "title": title,
-                    "description": m['overview'],
-                    "poster": f"https://image.tmdb.org/t/p/w500{m['poster_path']}",
-                    "cover": f"https://image.tmdb.org/t/p/original{m.get('backdrop_path', '')}",
-                    "imdb": m['vote_average'],
-                    "year": int(m['release_date'][:4]) if m.get('release_date') else 0,
-                    "url": f"https://vidsrc.me/embed/movie?tmdb={m_id}", # ئەمە دواتر دەگۆڕین بۆ Extractor
-                    "type": "movie",
-                    "isDubbed": False,
-                    "hasKurdishSub": True if kurdish_subtitle_text else False # نیشانەیەک بۆ ئەپەکەت کە کوردی هەیە
-                }
-                ref.set(movie_data)
-                
-                # زۆر گرنگ: تەنها ٢ فیلم لە هەر کارپێکردنێکدا وەردەگێڕێت تا گووگڵ بلۆکمان نەکات!
-                movies_processed_this_run += 1
-                if movies_processed_this_run >= 2:
-                    print("🛑 وەرگێڕانی ٢ فیلم تەواو بوو. پشوودان بۆ جاری داهاتوو تا گووگڵ ترانسلەیت بلۆکمان نەکات.")
-                    break
-            else:
-                pass # فیلمەکە پێشتر هەیە
-                
-    except Exception as e:
-        print(f"Error during sync: {e}")
+    processed = 0
+    for m_id, movie_data in all_movies.items():
+        # پشکنین دەکات بزانێت ئایا ئەم فیلمە ژێرنووسی کوردی بۆ کراوە؟
+        sub_ref = db.reference(f'/kurdish_subtitles/{m_id}')
+        
+        if sub_ref.get() is None:
+            title = movie_data.get('title', 'Unknown')
+            print(f"🎬 خەریکی پەیداکردنی ژێرنووس بۆ فیلمی: {title}")
+            
+            # هێنانی ژێرنووسە ئینگلیزییەکە بەپێی ئایدی فیلمەکە
+            eng_sub_url = f"https://sub.wyzie.ru/search?id={m_id}&format=srt&encoding=utf-8"
+            
+            try:
+                eng_sub_response = requests.get(eng_sub_url)
+                if eng_sub_response.status_code == 200 and len(eng_sub_response.text) > 100:
+                    
+                    # وەرگێڕان بۆ کوردی
+                    kurdish_text = translate_srt_to_kurdish(eng_sub_response.text)
+                    
+                    # خەزنکردنی لە فایەربەیس
+                    sub_ref.set({"srt_content": kurdish_text})
+                    
+                    # گۆڕینی نیشانەی فیلمەکە بۆ ئەوەی ئەپەکەت بزانێت کوردی هەیە
+                    movies_ref.child(m_id).update({"hasKurdishSub": True})
+                    print(f"✅ وەرگێڕان تەواو بوو بۆ فیلمی: {title}")
+                else:
+                    print(f"⚠️ ژێرنووسی ئینگلیزی نەدۆزرایەوە بۆ: {title}")
+            except Exception as e:
+                print(f"Error fetching subtitle for {title}: {e}")
+            
+            # زۆر گرنگ: تەنها ٢ فیلم لە هەر کارپێکردنێکدا تا بلۆک نەبین
+            processed += 1
+            if processed >= 2:
+                print("🛑 وەرگێڕانی ٢ فیلم تەواو بوو. پشوودان بۆ ٥ خولەکی تر...")
+                break
 
 if __name__ == "__main__":
-    print("🚀 مەکینەی وەرگێڕان دەستی پێکرد...")
-    sync_movies()
+    print("🚀 مەکینەی وەرگێڕانی فیلمەکانی ناو فایەربەیس دەستی پێکرد...")
+    translate_existing_movies()
     print("✨ کارەکان تەواو بوون!")
